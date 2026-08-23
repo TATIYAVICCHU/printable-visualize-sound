@@ -181,27 +181,76 @@ export default function Home() {
     setScanOn(false);
   }, []);
 
+  /** Detect the four corner markers in an arbitrary frame (live capture or an
+   * uploaded photo) and decode against the bundled print_target.json. */
+  const decodeFrameAgainstPrintTarget = useCallback(async (vw: number, vh: number, frame: Uint8ClampedArray) => {
+    const res = await fetch("/samples/print_target.json");
+    if (!res.ok) throw new Error(`could not load print_target.json: ${res.status}`);
+    const target: PrintTargetFile = await res.json();
+    const [codeWidth, codeHeight] = target.code_area_px;
+    const m = target.meta;
+    const meta: Meta = {
+      scheme: m.scheme, sr: m.sr, nFft: m.n_fft, hop: m.hop,
+      ref: m.ref, anchor: m.anchor, nSamples: m.n_samples,
+    };
+
+    const found = detectMarkers(vw, vh, frame);
+    const byId = new Map(found.map((f) => [f.id, f.center]));
+    const missing = [0, 1, 2, 3].filter((id) => !byId.has(id));
+    if (missing.length) {
+      throw new Error(`only found markers [${[...byId.keys()].sort()}], missing [${missing}] — `
+        + "make sure all four corner markers are visible, the page is flat, and lighting is even");
+    }
+
+    const srcPts = [0, 1, 2, 3].map((id) => byId.get(id)!);
+    const dstPts = [0, 1, 2, 3].map((id) => {
+      const [x, y] = target.marker_centers_px[String(id)];
+      return { x, y };
+    });
+    const H = computeHomography(srcPts, dstPts);
+    const [x0, y0] = target.code_corners_px.top_left;
+
+    const shrunkData = sampleBlocksViaHomography(vw, vh, frame, H, x0, y0, codeWidth, codeHeight, m.block);
+    const binsW = Math.floor(codeWidth / m.block), binsH = Math.floor(codeHeight / m.block);
+    const y = decode(binsW, binsH, shrunkData, meta);
+    return { samples: y, sr: m.sr };
+  }, []);
+
+  const imageFileToFrame = useCallback(async (file: File): Promise<{ vw: number; vh: number; frame: Uint8ClampedArray }> => {
+    const bitmap = await createImageBitmap(file);
+    const canvas = document.createElement("canvas");
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    const ctx = canvas.getContext("2d")!;
+    ctx.drawImage(bitmap, 0, 0);
+    const frame = ctx.getImageData(0, 0, bitmap.width, bitmap.height).data;
+    return { vw: bitmap.width, vh: bitmap.height, frame };
+  }, []);
+
+  const scanFileInputRef = useRef<HTMLInputElement>(null);
+
+  const uploadAndScan = useCallback(async (file: File) => {
+    setScanBusy(true);
+    setScanError(null);
+    try {
+      const { vw, vh, frame } = await imageFileToFrame(file);
+      const { samples, sr } = await decodeFrameAgainstPrintTarget(vw, vh, frame);
+      setUploaded({ samples, sr, name: `scanned photo: ${file.name}` });
+      closeScanCamera();
+    } catch (e) {
+      setScanError((e as Error).message);
+      console.error(e);
+    } finally {
+      setScanBusy(false);
+    }
+  }, [imageFileToFrame, decodeFrameAgainstPrintTarget, closeScanCamera]);
+
   const captureAndScan = useCallback(async () => {
     const video = scanVideoRef.current;
     if (!video) return;
     setScanBusy(true);
     setScanError(null);
     try {
-      const res = await fetch("/samples/print_target.json");
-      if (!res.ok) throw new Error(`could not load print_target.json: ${res.status}`);
-      const target: PrintTargetFile = await res.json();
-      const [codeWidth, codeHeight] = target.code_area_px;
-      const m = target.meta;
-      const meta: Meta = {
-        scheme: m.scheme,
-        sr: m.sr,
-        nFft: m.n_fft,
-        hop: m.hop,
-        ref: m.ref,
-        anchor: m.anchor,
-        nSamples: m.n_samples,
-      };
-
       const vw = video.videoWidth, vh = video.videoHeight;
       const shot = document.createElement("canvas");
       shot.width = vw;
@@ -210,27 +259,8 @@ export default function Home() {
       ctx.drawImage(video, 0, 0, vw, vh);
       const frame = ctx.getImageData(0, 0, vw, vh).data;
 
-      const found = detectMarkers(vw, vh, frame);
-      const byId = new Map(found.map((f) => [f.id, f.center]));
-      const missing = [0, 1, 2, 3].filter((id) => !byId.has(id));
-      if (missing.length) {
-        throw new Error(`only found markers [${[...byId.keys()].sort()}], missing [${missing}] — `
-          + "hold the page flatter, better lit, and make sure all four corner markers are in frame");
-      }
-
-      const srcPts = [0, 1, 2, 3].map((id) => byId.get(id)!);
-      const dstPts = [0, 1, 2, 3].map((id) => {
-        const [x, y] = target.marker_centers_px[String(id)];
-        return { x, y };
-      });
-      const H = computeHomography(srcPts, dstPts);
-      const [x0, y0] = target.code_corners_px.top_left;
-
-      const shrunkData = sampleBlocksViaHomography(vw, vh, new Uint8ClampedArray(frame), H, x0, y0, codeWidth, codeHeight, m.block);
-      const binsW = Math.floor(codeWidth / m.block), binsH = Math.floor(codeHeight / m.block);
-      const y = decode(binsW, binsH, shrunkData, meta);
-
-      setUploaded({ samples: y, sr: m.sr, name: "scanned printed page (camera)" });
+      const { samples, sr } = await decodeFrameAgainstPrintTarget(vw, vh, frame);
+      setUploaded({ samples, sr, name: "scanned printed page (camera)" });
       closeScanCamera();
     } catch (e) {
       setScanError((e as Error).message);
@@ -238,7 +268,7 @@ export default function Home() {
     } finally {
       setScanBusy(false);
     }
-  }, [closeScanCamera]);
+  }, [closeScanCamera, decodeFrameAgainstPrintTarget]);
 
   const run = useCallback(async () => {
     setBusy(true);
@@ -359,14 +389,71 @@ export default function Home() {
     setCameraOn(false);
   }, []);
 
-  const captureFromCamera = useCallback(() => {
+  /** Detect the four corner markers in a frame and decode against the
+   * current session's printable page (whatever was just generated/printed). */
+  const decodeFrameAgainstSession = useCallback((vw: number, vh: number, frame: Uint8ClampedArray) => {
     const session = sessionRef.current;
-    const video = videoRef.current;
-    if (!session || !video) return;
+    if (!session) throw new Error("run the pipeline first, then print or scan its output");
+    const { codeWidth, codeHeight, page } = session;
+
+    const found = detectMarkers(vw, vh, frame);
+    const byId = new Map(found.map((f) => [f.id, f.center]));
+    const missing = [0, 1, 2, 3].filter((id) => !byId.has(id));
+    if (missing.length) {
+      throw new Error(`only found markers [${[...byId.keys()].sort()}], missing [${missing}] — `
+        + "make sure the whole printed page is in frame, flat, and evenly lit");
+    }
+
+    const srcPts = [0, 1, 2, 3].map((id) => byId.get(id)!);
+    const dstPts = [0, 1, 2, 3].map((id) => page.markerCenters[id]);
+    const H = computeHomography(srcPts, dstPts);
+
+    const shrunkData = sampleBlocksViaHomography(vw, vh, frame, H, page.codeX0, page.codeY0, codeWidth, codeHeight, session.blockSize);
+    let finalData = shrunkData;
+    let finalWidth = Math.floor(codeWidth / session.blockSize);
+    let finalHeight = Math.floor(codeHeight / session.blockSize);
+    if (session.layoutMode === "hilbert" && session.squareInfo) {
+      finalData = fromHilbertSquare(session.squareInfo.side, shrunkData, session.encWidth, session.encHeight, session.squareInfo.nCells);
+      finalWidth = session.encWidth;
+      finalHeight = session.encHeight;
+    }
+
+    const y = decode(finalWidth, finalHeight, finalData, session.meta);
+    return { samples: y, sr: session.sr, session };
+  }, []);
+
+  const cameraFileInputRef = useRef<HTMLInputElement>(null);
+
+  const uploadAndDecodeSession = useCallback(async (file: File) => {
     setCameraBusy(true);
     setCameraError(null);
     try {
-      const { codeWidth, codeHeight, page } = session;
+      const { vw, vh, frame } = await imageFileToFrame(file);
+      const { samples, sr, session } = decodeFrameAgainstSession(vw, vh, frame);
+      const audioUrl = URL.createObjectURL(floatToWavBlob(samples, sr));
+      const thumb = document.createElement("canvas");
+      thumb.width = vw; thumb.height = vh;
+      thumb.getContext("2d")!.putImageData(new ImageData(new Uint8ClampedArray(frame), vw, vh), 0, 0);
+      setCameraResult({
+        thumbUrl: thumb.toDataURL(),
+        audioUrl,
+        snr: snrDb(session.originalSamples, samples),
+        correlation: correlation(session.originalSamples, samples),
+      });
+    } catch (e) {
+      setCameraError((e as Error).message);
+      console.error(e);
+    } finally {
+      setCameraBusy(false);
+    }
+  }, [imageFileToFrame, decodeFrameAgainstSession]);
+
+  const captureFromCamera = useCallback(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    setCameraBusy(true);
+    setCameraError(null);
+    try {
       const vw = video.videoWidth, vh = video.videoHeight;
       const shot = document.createElement("canvas");
       shot.width = vw;
@@ -375,36 +462,14 @@ export default function Home() {
       ctx.drawImage(video, 0, 0, vw, vh);
       const frame = ctx.getImageData(0, 0, vw, vh).data;
 
-      const found = detectMarkers(vw, vh, frame);
-      const byId = new Map(found.map((f) => [f.id, f.center]));
-      const missing = [0, 1, 2, 3].filter((id) => !byId.has(id));
-      if (missing.length) {
-        throw new Error(`only found markers [${[...byId.keys()].sort()}], missing [${missing}] — `
-          + "fill the box with the whole printed page, hold it flatter, or improve lighting");
-      }
-
-      const srcPts = [0, 1, 2, 3].map((id) => byId.get(id)!);
-      const dstPts = [0, 1, 2, 3].map((id) => page.markerCenters[id]);
-      const H = computeHomography(srcPts, dstPts);
-
-      const shrunkData = sampleBlocksViaHomography(vw, vh, new Uint8ClampedArray(frame), H, page.codeX0, page.codeY0, codeWidth, codeHeight, session.blockSize);
-      let finalData = shrunkData;
-      let finalWidth = Math.floor(codeWidth / session.blockSize);
-      let finalHeight = Math.floor(codeHeight / session.blockSize);
-      if (session.layoutMode === "hilbert" && session.squareInfo) {
-        finalData = fromHilbertSquare(session.squareInfo.side, shrunkData, session.encWidth, session.encHeight, session.squareInfo.nCells);
-        finalWidth = session.encWidth;
-        finalHeight = session.encHeight;
-      }
-
-      const y = decode(finalWidth, finalHeight, finalData, session.meta);
-      const audioUrl = URL.createObjectURL(floatToWavBlob(y, session.sr));
+      const { samples, sr, session } = decodeFrameAgainstSession(vw, vh, frame);
+      const audioUrl = URL.createObjectURL(floatToWavBlob(samples, sr));
 
       setCameraResult({
         thumbUrl: shot.toDataURL(),
         audioUrl,
-        snr: snrDb(session.originalSamples, y),
-        correlation: correlation(session.originalSamples, y),
+        snr: snrDb(session.originalSamples, samples),
+        correlation: correlation(session.originalSamples, samples),
       });
     } catch (e) {
       setCameraError((e as Error).message);
@@ -412,7 +477,7 @@ export default function Home() {
     } finally {
       setCameraBusy(false);
     }
-  }, []);
+  }, [decodeFrameAgainstSession]);
 
   return (
     <div className="min-h-screen bg-neutral-50 text-neutral-900 dark:bg-neutral-950 dark:text-neutral-100">
@@ -479,6 +544,14 @@ export default function Home() {
                 >
                   📷
                 </button>
+                <button
+                  onClick={() => scanFileInputRef.current?.click()}
+                  disabled={scanBusy}
+                  title="Upload a photo of the printed page instead of using the camera live"
+                  className="rounded-lg border border-dashed border-neutral-300 px-3 py-2 text-sm text-neutral-600 hover:border-rose-400 disabled:opacity-50 dark:border-neutral-700 dark:text-neutral-400"
+                >
+                  🖼️
+                </button>
               </div>
               <input
                 ref={fileInputRef}
@@ -486,6 +559,13 @@ export default function Home() {
                 accept="audio/*"
                 className="hidden"
                 onChange={(e) => e.target.files?.[0] && onFile(e.target.files[0])}
+              />
+              <input
+                ref={scanFileInputRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={(e) => e.target.files?.[0] && uploadAndScan(e.target.files[0])}
               />
 
               <div className={`mt-2 space-y-2 ${scanOn ? "" : "hidden"}`}>
@@ -684,14 +764,31 @@ export default function Home() {
 
                 <div className="rounded-xl border border-neutral-200 bg-white p-4 dark:border-neutral-800 dark:bg-neutral-900">
                   <p className="mb-2 font-mono text-xs uppercase tracking-wide text-neutral-500">
-                    Live camera test
+                    Camera test
                   </p>
-                  <button
-                    onClick={openCamera}
-                    className={`w-full rounded-lg border border-dashed border-neutral-300 px-3 py-2 text-sm text-neutral-600 hover:border-rose-400 dark:border-neutral-700 dark:text-neutral-400 ${cameraOn ? "hidden" : ""}`}
-                  >
-                    📷 Open camera
-                  </button>
+                  <div className={`flex gap-2 ${cameraOn ? "hidden" : ""}`}>
+                    <button
+                      onClick={openCamera}
+                      className="flex-1 rounded-lg border border-dashed border-neutral-300 px-3 py-2 text-sm text-neutral-600 hover:border-rose-400 dark:border-neutral-700 dark:text-neutral-400"
+                    >
+                      📷 Open camera
+                    </button>
+                    <button
+                      onClick={() => cameraFileInputRef.current?.click()}
+                      disabled={cameraBusy}
+                      title="Upload a photo of the printed page instead of using the camera live"
+                      className="rounded-lg border border-dashed border-neutral-300 px-3 py-2 text-sm text-neutral-600 hover:border-rose-400 disabled:opacity-50 dark:border-neutral-700 dark:text-neutral-400"
+                    >
+                      🖼️
+                    </button>
+                  </div>
+                  <input
+                    ref={cameraFileInputRef}
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(e) => e.target.files?.[0] && uploadAndDecodeSession(e.target.files[0])}
+                  />
                   <div className={`space-y-3 ${cameraOn ? "" : "hidden"}`}>
                     <div className="relative overflow-hidden rounded-lg bg-black">
                       <video ref={videoRef} muted playsInline className="w-full" />
