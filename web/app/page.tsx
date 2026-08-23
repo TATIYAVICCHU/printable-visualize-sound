@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useRef, useState } from "react";
-import { encode, decode, Scheme, EncodedImage } from "@/lib/codec";
+import { encode, decode, Meta, Scheme, EncodedImage } from "@/lib/codec";
 import { printScan, undoGamma, expandBlocks, shrinkBlocks, DAMAGE_PRESETS, Damage } from "@/lib/channel";
 import { toHilbertSquare, fromHilbertSquare } from "@/lib/layout";
 import { snrDb, correlation } from "@/lib/metrics";
@@ -15,10 +15,33 @@ interface RunResult {
   decodedUrl: string;
   encodedCanvasUrl: string;
   damagedCanvasUrl: string;
+  printableUrl: string;
   snr: number;
   correlation: number;
   imageDims: string;
   seconds: number;
+}
+
+/** What a camera capture needs to decode against: the exact settings and
+ * dimensions of whatever was actually printed or shown on screen. */
+interface PrintSession {
+  meta: Meta;
+  blockSize: number;
+  layoutMode: LayoutMode;
+  squareInfo: { side: number; nCells: number } | null;
+  encWidth: number;
+  encHeight: number;
+  codeWidth: number;
+  codeHeight: number;
+  originalSamples: Float64Array;
+  sr: number;
+}
+
+interface CameraResult {
+  thumbUrl: string;
+  audioUrl: string;
+  snr: number;
+  correlation: number;
 }
 
 const SR = 16000;
@@ -45,6 +68,15 @@ export default function Home() {
   const [result, setResult] = useState<RunResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const sessionRef = useRef<PrintSession | null>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const [cameraOn, setCameraOn] = useState(false);
+  const [cameraBusy, setCameraBusy] = useState(false);
+  const [cameraError, setCameraError] = useState<string | null>(null);
+  const [cameraResult, setCameraResult] = useState<CameraResult | null>(null);
+  const [codeAspect, setCodeAspect] = useState(1);
 
   const onFile = useCallback(async (file: File) => {
     setBusy(true);
@@ -93,11 +125,27 @@ export default function Home() {
 
       const damage: Damage = DAMAGE_PRESETS[damagePreset];
       const expanded = expandBlocks(width, height, data, blockSize);
+      const printableCanvas = drawToCanvas(expanded.width, expanded.height, expanded.data);
       const damagedRaw = printScan(expanded.width, expanded.height, expanded.data, damage);
       const shrunk = shrinkBlocks(expanded.width, expanded.height, damagedRaw, blockSize);
       const damagedData = undoGamma(shrunk.width, shrunk.height, shrunk.data, damage.gamma);
 
       const damagedCanvas = drawToCanvas(shrunk.width, shrunk.height, damagedData);
+
+      sessionRef.current = {
+        meta: enc.meta,
+        blockSize,
+        layoutMode,
+        squareInfo,
+        encWidth: enc.width,
+        encHeight: enc.height,
+        codeWidth: expanded.width,
+        codeHeight: expanded.height,
+        originalSamples: x,
+        sr,
+      };
+      setCameraResult(null);
+      setCodeAspect(expanded.width / expanded.height);
 
       let finalData = damagedData;
       let finalWidth = shrunk.width;
@@ -118,6 +166,7 @@ export default function Home() {
         decodedUrl,
         encodedCanvasUrl: encodedCanvas.toDataURL(),
         damagedCanvasUrl: damagedCanvas.toDataURL(),
+        printableUrl: printableCanvas.toDataURL(),
         snr: snrDb(x, y),
         correlation: correlation(x, y),
         imageDims: `${enc.width}×${enc.height} → page ${expanded.width}×${expanded.height}px (${blockSize}×${blockSize} block)`,
@@ -130,6 +179,86 @@ export default function Home() {
       setBusy(false);
     }
   }, [uploaded, sample, scheme, layoutMode, blockSize, damagePreset]);
+
+  const openCamera = useCallback(async () => {
+    setCameraError(null);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "environment" },
+        audio: false,
+      });
+      streamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
+      }
+      setCameraOn(true);
+    } catch (e) {
+      setCameraError(`could not open camera: ${(e as Error).message}`);
+    }
+  }, []);
+
+  const closeCamera = useCallback(() => {
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+    streamRef.current = null;
+    setCameraOn(false);
+  }, []);
+
+  const captureFromCamera = useCallback(() => {
+    const session = sessionRef.current;
+    const video = videoRef.current;
+    if (!session || !video) return;
+    setCameraBusy(true);
+    setCameraError(null);
+    try {
+      const { codeWidth, codeHeight } = session;
+      // Crop the video frame to the guide box's aspect ratio (center crop),
+      // then scale that crop to the exact printed/displayed pixel size.
+      const targetAspect = codeWidth / codeHeight;
+      const vw = video.videoWidth, vh = video.videoHeight;
+      const videoAspect = vw / vh;
+      let sx = 0, sy = 0, sw = vw, sh = vh;
+      if (videoAspect > targetAspect) {
+        sw = vh * targetAspect;
+        sx = (vw - sw) / 2;
+      } else {
+        sh = vw / targetAspect;
+        sy = (vh - sh) / 2;
+      }
+
+      const shot = document.createElement("canvas");
+      shot.width = codeWidth;
+      shot.height = codeHeight;
+      const ctx = shot.getContext("2d")!;
+      ctx.drawImage(video, sx, sy, sw, sh, 0, 0, codeWidth, codeHeight);
+      const captured = ctx.getImageData(0, 0, codeWidth, codeHeight).data;
+
+      const shrunk = shrinkBlocks(codeWidth, codeHeight, new Uint8ClampedArray(captured), session.blockSize);
+      let finalData = shrunk.data;
+      let finalWidth = shrunk.width;
+      let finalHeight = shrunk.height;
+      if (session.layoutMode === "hilbert" && session.squareInfo) {
+        finalData = fromHilbertSquare(session.squareInfo.side, shrunk.data, session.encWidth, session.encHeight, session.squareInfo.nCells);
+        finalWidth = session.encWidth;
+        finalHeight = session.encHeight;
+      }
+
+      const y = decode(finalWidth, finalHeight, finalData, session.meta);
+      const audioUrl = URL.createObjectURL(floatToWavBlob(y, session.sr));
+
+      setCameraResult({
+        thumbUrl: shot.toDataURL(),
+        audioUrl,
+        snr: snrDb(session.originalSamples, y),
+        correlation: correlation(session.originalSamples, y),
+      });
+    } catch (e) {
+      setCameraError((e as Error).message);
+      console.error(e);
+    } finally {
+      setCameraBusy(false);
+    }
+  }, []);
 
   return (
     <div className="min-h-screen bg-neutral-50 text-neutral-900 dark:bg-neutral-950 dark:text-neutral-100">
@@ -329,6 +458,86 @@ export default function Home() {
                   <Stat label="Correlation" value={result.correlation.toFixed(3)} />
                   <Stat label="Duration" value={`${result.seconds.toFixed(1)}s`} />
                   <Stat label="Image size" value={result.imageDims} small />
+                </div>
+
+                <div className="rounded-xl border border-neutral-200 bg-white p-4 dark:border-neutral-800 dark:bg-neutral-900">
+                  <div className="mb-2 flex items-center justify-between">
+                    <p className="font-mono text-xs uppercase tracking-wide text-neutral-500">
+                      Printable page (no simulated damage)
+                    </p>
+                    <a
+                      href={result.printableUrl}
+                      download="visualize-sound-page.png"
+                      className="text-xs font-medium text-rose-600 hover:underline dark:text-rose-400"
+                    >
+                      Download PNG
+                    </a>
+                  </div>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={result.printableUrl} alt="full-resolution printable page" className="mx-auto max-h-72 rounded border border-neutral-200 dark:border-neutral-800" style={{ imageRendering: "pixelated" }} />
+                  <p className="mt-2 text-xs text-neutral-500">
+                    Print this, or show it on another screen, then use the camera below to test it for real —
+                    no simulated damage involved, whatever the camera actually sees.
+                  </p>
+                </div>
+
+                <div className="rounded-xl border border-neutral-200 bg-white p-4 dark:border-neutral-800 dark:bg-neutral-900">
+                  <p className="mb-2 font-mono text-xs uppercase tracking-wide text-neutral-500">
+                    Live camera test
+                  </p>
+                  {!cameraOn ? (
+                    <button
+                      onClick={openCamera}
+                      className="w-full rounded-lg border border-dashed border-neutral-300 px-3 py-2 text-sm text-neutral-600 hover:border-rose-400 dark:border-neutral-700 dark:text-neutral-400"
+                    >
+                      📷 Open camera
+                    </button>
+                  ) : (
+                    <div className="space-y-3">
+                      <div className="relative overflow-hidden rounded-lg bg-black">
+                        <video ref={videoRef} muted playsInline className="w-full" />
+                        <div
+                          className="pointer-events-none absolute inset-6 border-2 border-dashed border-rose-400/80"
+                          style={{ aspectRatio: codeAspect }}
+                        />
+                      </div>
+                      <p className="text-xs text-neutral-500">
+                        Fill the dashed box with the printed or on-screen page, hold steady, then capture.
+                      </p>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={captureFromCamera}
+                          disabled={cameraBusy}
+                          className="flex-1 rounded-lg bg-rose-600 px-3 py-2 text-sm font-medium text-white hover:bg-rose-700 disabled:opacity-50"
+                        >
+                          {cameraBusy ? "decoding…" : "Capture & decode"}
+                        </button>
+                        <button
+                          onClick={closeCamera}
+                          className="rounded-lg border border-neutral-300 px-3 py-2 text-sm text-neutral-600 dark:border-neutral-700 dark:text-neutral-400"
+                        >
+                          Close
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                  {cameraError && <p className="mt-2 text-sm text-red-600 dark:text-red-400">{cameraError}</p>}
+
+                  {cameraResult && (
+                    <div className="mt-4 space-y-3 border-t border-neutral-200 pt-4 dark:border-neutral-800">
+                      <div className="flex gap-4">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src={cameraResult.thumbUrl} alt="captured frame" className="h-24 w-24 flex-none rounded border border-neutral-200 object-cover dark:border-neutral-800" />
+                        <div className="flex-1 space-y-2">
+                          <audio controls src={cameraResult.audioUrl} className="w-full" />
+                          <div className="flex gap-4 text-xs text-neutral-600 dark:text-neutral-400">
+                            <span>SNR: <strong>{Number.isFinite(cameraResult.snr) ? `${cameraResult.snr.toFixed(1)} dB` : "∞"}</strong></span>
+                            <span>Correlation: <strong>{cameraResult.correlation.toFixed(3)}</strong></span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </>
             )}
