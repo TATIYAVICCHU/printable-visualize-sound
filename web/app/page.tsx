@@ -5,7 +5,7 @@ import { encode, decode, Scheme, EncodedImage } from "@/lib/codec";
 import { printScan, undoGamma, expandBlocks, shrinkBlocks, DAMAGE_PRESETS, Damage } from "@/lib/channel";
 import { toHilbertSquare, fromHilbertSquare } from "@/lib/layout";
 import { snrDb, correlation } from "@/lib/metrics";
-import { floatToWavBlob, decodeAudioFile, SAMPLES } from "@/lib/wav";
+import { floatToWavBlob, decodeAudioFile, fetchSample, SAMPLES } from "@/lib/wav";
 
 type SampleName = keyof typeof SAMPLES;
 type LayoutMode = "strip" | "hilbert";
@@ -54,6 +54,19 @@ export default function Home() {
       setUploaded({ samples, sr, name: file.name });
     } catch (e) {
       setError(`could not decode audio file: ${(e as Error).message}`);
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+  const loadRealSpeech = useCallback(async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const { samples, sr } = await fetchSample("/samples/speech.wav", SR);
+      setUploaded({ samples, sr, name: "speech.wav (real recorded voice)" });
+    } catch (e) {
+      setError(`could not load sample: ${(e as Error).message}`);
     } finally {
       setBusy(false);
     }
@@ -140,6 +153,7 @@ export default function Home() {
               <label className="mb-2 block text-xs font-medium uppercase tracking-wide text-neutral-500">
                 Source audio
               </label>
+              <p className="mb-1.5 text-[10px] uppercase tracking-wide text-neutral-400">synthetic (instant)</p>
               <div className="flex flex-wrap gap-2">
                 {(Object.keys(SAMPLES) as SampleName[]).map((s) => (
                   <button
@@ -155,9 +169,22 @@ export default function Home() {
                   </button>
                 ))}
               </div>
+              <p className="mt-3 mb-1.5 text-[10px] uppercase tracking-wide text-neutral-400">real recorded audio</p>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={loadRealSpeech}
+                  className={`rounded-full px-3 py-1.5 text-sm ${
+                    uploaded?.name.startsWith("speech.wav")
+                      ? "bg-rose-600 text-white"
+                      : "bg-neutral-100 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300"
+                  }`}
+                >
+                  speech (voice, 5.9s)
+                </button>
+              </div>
               <button
                 onClick={() => fileInputRef.current?.click()}
-                className="mt-2 w-full rounded-lg border border-dashed border-neutral-300 px-3 py-2 text-sm text-neutral-600 hover:border-rose-400 dark:border-neutral-700 dark:text-neutral-400"
+                className="mt-3 w-full rounded-lg border border-dashed border-neutral-300 px-3 py-2 text-sm text-neutral-600 hover:border-rose-400 dark:border-neutral-700 dark:text-neutral-400"
               >
                 {uploaded ? `✓ ${uploaded.name}` : "or upload your own audio file…"}
               </button>
