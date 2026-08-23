@@ -76,7 +76,8 @@ python3 -m venv .venv
 ```
 
 Images, decoded `.wav` files, and figures land in `out/` (gitignored,
-regenerate any time with the commands above).
+regenerate any time with the commands above). The figures shown below are
+copied into `assets/figures/`, which is tracked, so they render on GitHub.
 
 ## Results
 
@@ -85,7 +86,7 @@ regenerate any time with the commands above).
 The first working version encoded sound the same way every audio editor
 already does — a strip, not a matrix. The fix is a Hilbert curve fold:
 
-![Serpentine fold on the left with visible cut bands; Hilbert curve fold on the right with continuous blocky texture and no cuts](out/square_layouts.png)
+![Serpentine fold on the left with visible cut bands; Hilbert curve fold on the right with continuous blocky texture and no cuts](assets/figures/square_layouts.png)
 
 Both layouts decode to bit-identical audio (PESQ 4.59, matching the strip
 layout exactly) — a layout permutes cells, it doesn't discard any. What
@@ -94,7 +95,7 @@ will probe directly.
 
 ### What the encodings look like
 
-![Chirp, music, speech, and environmental noise clips shown as phase-as-hue color spectrograms next to grayscale magnitude-only spectrograms](out/gallery.png)
+![Chirp, music, speech, and environmental noise clips shown as phase-as-hue color spectrograms next to grayscale magnitude-only spectrograms](assets/figures/gallery.png)
 
 Raw phase-as-hue is information-complete but reads as color speckle rather
 than a legible pattern — correct, but a poor human-viewing encoding and,
@@ -106,7 +107,7 @@ Digitally, phase-as-hue is close to transparent (PESQ 4.59 vs. 3.69 for
 magnitude-only). Push the same images through the simulated channel at one
 spectrogram bin per pixel and the result inverts completely:
 
-![Line chart: PESQ for hsv and ifreq schemes collapsing sharply under increasing simulated channel damage, while grayscale degrades gracefully](out/channel_survival.png)
+![Line chart: PESQ for hsv and ifreq schemes collapsing sharply under increasing simulated channel damage, while grayscale degrades gracefully](assets/figures/channel_survival.png)
 
 Fine hue detail is the first casualty of ink spread and chroma subsampling. A
 standard phase-vocoder fix (encoding phase as a smooth frame-to-frame
@@ -114,7 +115,7 @@ deviation instead of its raw value) measurably smooths the image but doesn't
 rescue quality, because the decoder must integrate the deviations and small
 errors accumulate forward through time:
 
-![Scatter plot of PESQ against hue roughness for different phase re-anchoring intervals](out/anchor_tradeoff.png)
+![Scatter plot of PESQ against hue roughness for different phase re-anchoring intervals](assets/figures/anchor_tradeoff.png)
 
 ### The crossover
 
@@ -122,7 +123,7 @@ The comparison above used the most fragile arrangement possible — one bin per
 pixel. Giving each bin a block of several pixels (the way barcodes buy
 robustness) produces a clean, quantified crossover:
 
-![Line chart: PESQ rising with block size for both schemes, phase-as-hue overtaking grayscale between 4x4 and 8x8 pixels per bin](out/block_size.png)
+![Line chart: PESQ rising with block size for both schemes, phase-as-hue overtaking grayscale between 4x4 and 8x8 pixels per bin](assets/figures/block_size.png)
 
 Grayscale plateaus near PESQ 3.7 regardless of resolution — guessed phase is
 its hard ceiling. Phase-carrying color keeps climbing toward the digital
@@ -157,6 +158,7 @@ scripts/
   figure_gallery.py       renders the encoding comparison figure
 samples/     generated test audio (gitignored)
 out/         generated images, decoded audio, figures (gitignored)
+assets/figures/  tracked copies of the figures shown in this README
 ```
 
 ## Credits and sources
