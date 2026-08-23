@@ -1,0 +1,20 @@
+{
+  "meta": {
+    "scheme": "hsv",
+    "sr": 16000,
+    "n_fft": 1024,
+    "hop": 256,
+    "ref": 75.58786573941725,
+    "anchor": 0,
+    "db_floor": -80.0,
+    "n_samples": 93611,
+    "block": 4,
+    "clip": "speech"
+  },
+  "code_area_px": [
+    1464,
+    2052
+  ],
+  "margin_px": 60,
+  "marker_px": 28
+}

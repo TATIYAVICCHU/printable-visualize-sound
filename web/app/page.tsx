@@ -44,9 +44,40 @@ interface CameraResult {
   correlation: number;
 }
 
+/** Shape of the bundled print_target.json, written by scripts/make_print_target.py
+ * (Python keeps snake_case field names; converted to Meta below). */
+interface PrintTargetFile {
+  meta: {
+    scheme: Scheme;
+    sr: number;
+    n_fft: number;
+    hop: number;
+    ref: number;
+    anchor: number;
+    n_samples: number;
+    block: number;
+  };
+  code_area_px: [number, number];
+}
+
 const SR = 16000;
 const N_FFT = 1024;
 const HOP = 256;
+
+function printImage(dataUrl: string) {
+  const win = window.open("", "_blank", "width=600,height=800");
+  if (!win) return;
+  win.document.write(`<!doctype html><title>Print</title><style>
+    @page { margin: 0.5in; }
+    body { margin: 0; display: flex; align-items: center; justify-content: center; }
+    img { max-width: 100%; image-rendering: pixelated; }
+  </style><img src="${dataUrl}">`);
+  win.document.close();
+  const img = win.document.querySelector("img");
+  const trigger = () => { win.focus(); win.print(); };
+  if (img && !img.complete) img.addEventListener("load", trigger);
+  else trigger();
+}
 
 function drawToCanvas(width: number, height: number, data: Uint8ClampedArray): HTMLCanvasElement {
   const canvas = document.createElement("canvas");
@@ -68,6 +99,13 @@ export default function Home() {
   const [result, setResult] = useState<RunResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const scanVideoRef = useRef<HTMLVideoElement>(null);
+  const scanStreamRef = useRef<MediaStream | null>(null);
+  const [scanOn, setScanOn] = useState(false);
+  const [scanBusy, setScanBusy] = useState(false);
+  const [scanError, setScanError] = useState<string | null>(null);
+  const [scanAspect, setScanAspect] = useState(1464 / 2052);
 
   const sessionRef = useRef<PrintSession | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -103,6 +141,94 @@ export default function Home() {
       setBusy(false);
     }
   }, []);
+
+  const openScanCamera = useCallback(async () => {
+    setScanError(null);
+    try {
+      try {
+        const res = await fetch("/samples/print_target.json");
+        if (res.ok) {
+          const target: PrintTargetFile = await res.json();
+          const [w, h] = target.code_area_px;
+          setScanAspect(w / h);
+        }
+      } catch {
+        // guide box keeps its default aspect ratio if this fails
+      }
+
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "environment" },
+        audio: false,
+      });
+      scanStreamRef.current = stream;
+      if (scanVideoRef.current) {
+        scanVideoRef.current.srcObject = stream;
+        await scanVideoRef.current.play();
+      }
+      setScanOn(true);
+    } catch (e) {
+      setScanError(`could not open camera: ${(e as Error).message}`);
+    }
+  }, []);
+
+  const closeScanCamera = useCallback(() => {
+    scanStreamRef.current?.getTracks().forEach((t) => t.stop());
+    scanStreamRef.current = null;
+    setScanOn(false);
+  }, []);
+
+  const captureAndScan = useCallback(async () => {
+    const video = scanVideoRef.current;
+    if (!video) return;
+    setScanBusy(true);
+    setScanError(null);
+    try {
+      const res = await fetch("/samples/print_target.json");
+      if (!res.ok) throw new Error(`could not load print_target.json: ${res.status}`);
+      const target: PrintTargetFile = await res.json();
+      const [codeWidth, codeHeight] = target.code_area_px;
+      const m = target.meta;
+      const meta: Meta = {
+        scheme: m.scheme,
+        sr: m.sr,
+        nFft: m.n_fft,
+        hop: m.hop,
+        ref: m.ref,
+        anchor: m.anchor,
+        nSamples: m.n_samples,
+      };
+
+      const targetAspect = codeWidth / codeHeight;
+      const vw = video.videoWidth, vh = video.videoHeight;
+      const videoAspect = vw / vh;
+      let sx = 0, sy = 0, sw = vw, sh = vh;
+      if (videoAspect > targetAspect) {
+        sw = vh * targetAspect;
+        sx = (vw - sw) / 2;
+      } else {
+        sh = vw / targetAspect;
+        sy = (vh - sh) / 2;
+      }
+
+      const shot = document.createElement("canvas");
+      shot.width = codeWidth;
+      shot.height = codeHeight;
+      const ctx = shot.getContext("2d")!;
+      ctx.drawImage(video, sx, sy, sw, sh, 0, 0, codeWidth, codeHeight);
+      const captured = ctx.getImageData(0, 0, codeWidth, codeHeight).data;
+
+      const shrunk = shrinkBlocks(codeWidth, codeHeight, new Uint8ClampedArray(captured), m.block);
+      const y = decode(shrunk.width, shrunk.height, shrunk.data, meta);
+
+      setUploaded({ samples: y, sr: m.sr, name: "scanned printed page (camera)" });
+      closeScanCamera();
+    } catch (e) {
+      setScanError((e as Error).message);
+      console.error(e);
+    } finally {
+      setScanBusy(false);
+    }
+  }, [closeScanCamera]);
 
   const run = useCallback(async () => {
     setBusy(true);
@@ -311,12 +437,21 @@ export default function Home() {
                   speech (voice, 5.9s)
                 </button>
               </div>
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                className="mt-3 w-full rounded-lg border border-dashed border-neutral-300 px-3 py-2 text-sm text-neutral-600 hover:border-rose-400 dark:border-neutral-700 dark:text-neutral-400"
-              >
-                {uploaded ? `✓ ${uploaded.name}` : "or upload your own audio file…"}
-              </button>
+              <div className="mt-3 flex gap-2">
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  className="flex-1 rounded-lg border border-dashed border-neutral-300 px-3 py-2 text-sm text-neutral-600 hover:border-rose-400 dark:border-neutral-700 dark:text-neutral-400"
+                >
+                  {uploaded ? `✓ ${uploaded.name}` : "or upload your own audio file…"}
+                </button>
+                <button
+                  onClick={scanOn ? closeScanCamera : openScanCamera}
+                  title="Scan the printed page you already have (artifacts/print_target.png) with your camera"
+                  className="rounded-lg border border-dashed border-neutral-300 px-3 py-2 text-sm text-neutral-600 hover:border-rose-400 dark:border-neutral-700 dark:text-neutral-400"
+                >
+                  📷
+                </button>
+              </div>
               <input
                 ref={fileInputRef}
                 type="file"
@@ -324,6 +459,38 @@ export default function Home() {
                 className="hidden"
                 onChange={(e) => e.target.files?.[0] && onFile(e.target.files[0])}
               />
+
+              {scanOn && (
+                <div className="mt-2 space-y-2">
+                  <div className="relative overflow-hidden rounded-lg bg-black">
+                    <video ref={scanVideoRef} muted playsInline className="w-full" />
+                    <div
+                      className="pointer-events-none absolute inset-4 border-2 border-dashed border-rose-400/80"
+                      style={{ aspectRatio: scanAspect }}
+                    />
+                  </div>
+                  <p className="text-xs text-neutral-500">
+                    Fill the box with the printed page (the one sent from this project — speech,
+                    hsv, 4&times;4 blocks), then scan. Decodes it as your source audio.
+                  </p>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={captureAndScan}
+                      disabled={scanBusy}
+                      className="flex-1 rounded-lg bg-rose-600 px-3 py-2 text-sm font-medium text-white hover:bg-rose-700 disabled:opacity-50"
+                    >
+                      {scanBusy ? "decoding…" : "Scan"}
+                    </button>
+                    <button
+                      onClick={closeScanCamera}
+                      className="rounded-lg border border-neutral-300 px-3 py-2 text-sm text-neutral-600 dark:border-neutral-700 dark:text-neutral-400"
+                    >
+                      Close
+                    </button>
+                  </div>
+                </div>
+              )}
+              {scanError && <p className="mt-1 text-xs text-red-600 dark:text-red-400">{scanError}</p>}
             </div>
 
             <div>
@@ -465,13 +632,21 @@ export default function Home() {
                     <p className="font-mono text-xs uppercase tracking-wide text-neutral-500">
                       Printable page (no simulated damage)
                     </p>
-                    <a
-                      href={result.printableUrl}
-                      download="visualize-sound-page.png"
-                      className="text-xs font-medium text-rose-600 hover:underline dark:text-rose-400"
-                    >
-                      Download PNG
-                    </a>
+                    <div className="flex gap-3">
+                      <button
+                        onClick={() => printImage(result.printableUrl)}
+                        className="text-xs font-medium text-rose-600 hover:underline dark:text-rose-400"
+                      >
+                        Print
+                      </button>
+                      <a
+                        href={result.printableUrl}
+                        download="visualize-sound-page.png"
+                        className="text-xs font-medium text-rose-600 hover:underline dark:text-rose-400"
+                      >
+                        Download PNG
+                      </a>
+                    </div>
                   </div>
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img src={result.printableUrl} alt="full-resolution printable page" className="mx-auto max-h-72 rounded border border-neutral-200 dark:border-neutral-800" style={{ imageRendering: "pixelated" }} />
