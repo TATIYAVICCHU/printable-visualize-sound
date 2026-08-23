@@ -6,6 +6,7 @@ import { printScan, undoGamma, expandBlocks, shrinkBlocks, DAMAGE_PRESETS, Damag
 import { toHilbertSquare, fromHilbertSquare } from "@/lib/layout";
 import { snrDb, correlation } from "@/lib/metrics";
 import { floatToWavBlob, decodeAudioFile, fetchSample, SAMPLES } from "@/lib/wav";
+import { detectMarkers, computeHomography, layoutPage, sampleBlocksViaHomography, drawMarker, PageLayout } from "@/lib/aruco";
 
 type SampleName = keyof typeof SAMPLES;
 type LayoutMode = "strip" | "hilbert";
@@ -33,6 +34,7 @@ interface PrintSession {
   encHeight: number;
   codeWidth: number;
   codeHeight: number;
+  page: PageLayout;
   originalSamples: Float64Array;
   sr: number;
 }
@@ -58,6 +60,8 @@ interface PrintTargetFile {
     block: number;
   };
   code_area_px: [number, number];
+  code_corners_px: { top_left: [number, number] };
+  marker_centers_px: Record<string, [number, number]>;
 }
 
 const SR = 16000;
@@ -198,27 +202,33 @@ export default function Home() {
         nSamples: m.n_samples,
       };
 
-      const targetAspect = codeWidth / codeHeight;
       const vw = video.videoWidth, vh = video.videoHeight;
-      const videoAspect = vw / vh;
-      let sx = 0, sy = 0, sw = vw, sh = vh;
-      if (videoAspect > targetAspect) {
-        sw = vh * targetAspect;
-        sx = (vw - sw) / 2;
-      } else {
-        sh = vw / targetAspect;
-        sy = (vh - sh) / 2;
+      const shot = document.createElement("canvas");
+      shot.width = vw;
+      shot.height = vh;
+      const ctx = shot.getContext("2d")!;
+      ctx.drawImage(video, 0, 0, vw, vh);
+      const frame = ctx.getImageData(0, 0, vw, vh).data;
+
+      const found = detectMarkers(vw, vh, frame);
+      const byId = new Map(found.map((f) => [f.id, f.center]));
+      const missing = [0, 1, 2, 3].filter((id) => !byId.has(id));
+      if (missing.length) {
+        throw new Error(`only found markers [${[...byId.keys()].sort()}], missing [${missing}] — `
+          + "hold the page flatter, better lit, and make sure all four corner markers are in frame");
       }
 
-      const shot = document.createElement("canvas");
-      shot.width = codeWidth;
-      shot.height = codeHeight;
-      const ctx = shot.getContext("2d")!;
-      ctx.drawImage(video, sx, sy, sw, sh, 0, 0, codeWidth, codeHeight);
-      const captured = ctx.getImageData(0, 0, codeWidth, codeHeight).data;
+      const srcPts = [0, 1, 2, 3].map((id) => byId.get(id)!);
+      const dstPts = [0, 1, 2, 3].map((id) => {
+        const [x, y] = target.marker_centers_px[String(id)];
+        return { x, y };
+      });
+      const H = computeHomography(srcPts, dstPts);
+      const [x0, y0] = target.code_corners_px.top_left;
 
-      const shrunk = shrinkBlocks(codeWidth, codeHeight, new Uint8ClampedArray(captured), m.block);
-      const y = decode(shrunk.width, shrunk.height, shrunk.data, meta);
+      const shrunkData = sampleBlocksViaHomography(vw, vh, new Uint8ClampedArray(frame), H, x0, y0, codeWidth, codeHeight, m.block);
+      const binsW = Math.floor(codeWidth / m.block), binsH = Math.floor(codeHeight / m.block);
+      const y = decode(binsW, binsH, shrunkData, meta);
 
       setUploaded({ samples: y, sr: m.sr, name: "scanned printed page (camera)" });
       closeScanCamera();
@@ -251,12 +261,30 @@ export default function Home() {
 
       const damage: Damage = DAMAGE_PRESETS[damagePreset];
       const expanded = expandBlocks(width, height, data, blockSize);
-      const printableCanvas = drawToCanvas(expanded.width, expanded.height, expanded.data);
       const damagedRaw = printScan(expanded.width, expanded.height, expanded.data, damage);
       const shrunk = shrinkBlocks(expanded.width, expanded.height, damagedRaw, blockSize);
       const damagedData = undoGamma(shrunk.width, shrunk.height, shrunk.data, damage.gamma);
 
       const damagedCanvas = drawToCanvas(shrunk.width, shrunk.height, damagedData);
+
+      // The printable page adds four corner ArUco markers around the code
+      // area so a camera photo of it (crumpled, tilted, any distance) can be
+      // located and perspective-corrected before decoding, the same way
+      // scripts/make_print_target.py does on the Python side. Without this a
+      // camera capture has to assume perfect framing, which fails the
+      // moment the shot isn't square-on.
+      const page = layoutPage(expanded.width, expanded.height);
+      const printableCanvas = document.createElement("canvas");
+      printableCanvas.width = page.pageWidth;
+      printableCanvas.height = page.pageHeight;
+      const pageCtx = printableCanvas.getContext("2d")!;
+      pageCtx.fillStyle = "white";
+      pageCtx.fillRect(0, 0, page.pageWidth, page.pageHeight);
+      pageCtx.putImageData(new ImageData(new Uint8ClampedArray(expanded.data), expanded.width, expanded.height), page.codeX0, page.codeY0);
+      for (const id of [0, 1, 2, 3]) {
+        const p = page.markerPositions[id];
+        drawMarker(pageCtx, id, p.x, p.y, page.markerSize);
+      }
 
       sessionRef.current = {
         meta: enc.meta,
@@ -267,11 +295,12 @@ export default function Home() {
         encHeight: enc.height,
         codeWidth: expanded.width,
         codeHeight: expanded.height,
+        page,
         originalSamples: x,
         sr,
       };
       setCameraResult(null);
-      setCodeAspect(expanded.width / expanded.height);
+      setCodeAspect(page.pageWidth / page.pageHeight);
 
       let finalData = damagedData;
       let finalWidth = shrunk.width;
@@ -337,34 +366,33 @@ export default function Home() {
     setCameraBusy(true);
     setCameraError(null);
     try {
-      const { codeWidth, codeHeight } = session;
-      // Crop the video frame to the guide box's aspect ratio (center crop),
-      // then scale that crop to the exact printed/displayed pixel size.
-      const targetAspect = codeWidth / codeHeight;
+      const { codeWidth, codeHeight, page } = session;
       const vw = video.videoWidth, vh = video.videoHeight;
-      const videoAspect = vw / vh;
-      let sx = 0, sy = 0, sw = vw, sh = vh;
-      if (videoAspect > targetAspect) {
-        sw = vh * targetAspect;
-        sx = (vw - sw) / 2;
-      } else {
-        sh = vw / targetAspect;
-        sy = (vh - sh) / 2;
+      const shot = document.createElement("canvas");
+      shot.width = vw;
+      shot.height = vh;
+      const ctx = shot.getContext("2d")!;
+      ctx.drawImage(video, 0, 0, vw, vh);
+      const frame = ctx.getImageData(0, 0, vw, vh).data;
+
+      const found = detectMarkers(vw, vh, frame);
+      const byId = new Map(found.map((f) => [f.id, f.center]));
+      const missing = [0, 1, 2, 3].filter((id) => !byId.has(id));
+      if (missing.length) {
+        throw new Error(`only found markers [${[...byId.keys()].sort()}], missing [${missing}] — `
+          + "fill the box with the whole printed page, hold it flatter, or improve lighting");
       }
 
-      const shot = document.createElement("canvas");
-      shot.width = codeWidth;
-      shot.height = codeHeight;
-      const ctx = shot.getContext("2d")!;
-      ctx.drawImage(video, sx, sy, sw, sh, 0, 0, codeWidth, codeHeight);
-      const captured = ctx.getImageData(0, 0, codeWidth, codeHeight).data;
+      const srcPts = [0, 1, 2, 3].map((id) => byId.get(id)!);
+      const dstPts = [0, 1, 2, 3].map((id) => page.markerCenters[id]);
+      const H = computeHomography(srcPts, dstPts);
 
-      const shrunk = shrinkBlocks(codeWidth, codeHeight, new Uint8ClampedArray(captured), session.blockSize);
-      let finalData = shrunk.data;
-      let finalWidth = shrunk.width;
-      let finalHeight = shrunk.height;
+      const shrunkData = sampleBlocksViaHomography(vw, vh, new Uint8ClampedArray(frame), H, page.codeX0, page.codeY0, codeWidth, codeHeight, session.blockSize);
+      let finalData = shrunkData;
+      let finalWidth = Math.floor(codeWidth / session.blockSize);
+      let finalHeight = Math.floor(codeHeight / session.blockSize);
       if (session.layoutMode === "hilbert" && session.squareInfo) {
-        finalData = fromHilbertSquare(session.squareInfo.side, shrunk.data, session.encWidth, session.encHeight, session.squareInfo.nCells);
+        finalData = fromHilbertSquare(session.squareInfo.side, shrunkData, session.encWidth, session.encHeight, session.squareInfo.nCells);
         finalWidth = session.encWidth;
         finalHeight = session.encHeight;
       }
