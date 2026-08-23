@@ -460,36 +460,34 @@ export default function Home() {
                 onChange={(e) => e.target.files?.[0] && onFile(e.target.files[0])}
               />
 
-              {scanOn && (
-                <div className="mt-2 space-y-2">
-                  <div className="relative overflow-hidden rounded-lg bg-black">
-                    <video ref={scanVideoRef} muted playsInline className="w-full" />
-                    <div
-                      className="pointer-events-none absolute inset-4 border-2 border-dashed border-rose-400/80"
-                      style={{ aspectRatio: scanAspect }}
-                    />
-                  </div>
-                  <p className="text-xs text-neutral-500">
-                    Fill the box with the printed page (the one sent from this project — speech,
-                    hsv, 4&times;4 blocks), then scan. Decodes it as your source audio.
-                  </p>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={captureAndScan}
-                      disabled={scanBusy}
-                      className="flex-1 rounded-lg bg-rose-600 px-3 py-2 text-sm font-medium text-white hover:bg-rose-700 disabled:opacity-50"
-                    >
-                      {scanBusy ? "decoding…" : "Scan"}
-                    </button>
-                    <button
-                      onClick={closeScanCamera}
-                      className="rounded-lg border border-neutral-300 px-3 py-2 text-sm text-neutral-600 dark:border-neutral-700 dark:text-neutral-400"
-                    >
-                      Close
-                    </button>
-                  </div>
+              <div className={`mt-2 space-y-2 ${scanOn ? "" : "hidden"}`}>
+                <div className="relative overflow-hidden rounded-lg bg-black">
+                  <video ref={scanVideoRef} muted playsInline className="w-full" />
+                  <div
+                    className="pointer-events-none absolute inset-4 border-2 border-dashed border-rose-400/80"
+                    style={{ aspectRatio: scanAspect }}
+                  />
                 </div>
-              )}
+                <p className="text-xs text-neutral-500">
+                  Fill the box with the printed page (the one sent from this project — speech,
+                  hsv, 4&times;4 blocks), then scan. Decodes it as your source audio.
+                </p>
+                <div className="flex gap-2">
+                  <button
+                    onClick={captureAndScan}
+                    disabled={scanBusy}
+                    className="flex-1 rounded-lg bg-rose-600 px-3 py-2 text-sm font-medium text-white hover:bg-rose-700 disabled:opacity-50"
+                  >
+                    {scanBusy ? "decoding…" : "Scan"}
+                  </button>
+                  <button
+                    onClick={closeScanCamera}
+                    className="rounded-lg border border-neutral-300 px-3 py-2 text-sm text-neutral-600 dark:border-neutral-700 dark:text-neutral-400"
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
               {scanError && <p className="mt-1 text-xs text-red-600 dark:text-red-400">{scanError}</p>}
             </div>
 
@@ -660,42 +658,39 @@ export default function Home() {
                   <p className="mb-2 font-mono text-xs uppercase tracking-wide text-neutral-500">
                     Live camera test
                   </p>
-                  {!cameraOn ? (
-                    <button
-                      onClick={openCamera}
-                      className="w-full rounded-lg border border-dashed border-neutral-300 px-3 py-2 text-sm text-neutral-600 hover:border-rose-400 dark:border-neutral-700 dark:text-neutral-400"
-                    >
-                      📷 Open camera
-                    </button>
-                  ) : (
-                    <div className="space-y-3">
-                      <div className="relative overflow-hidden rounded-lg bg-black">
-                        <video ref={videoRef} muted playsInline className="w-full" />
-                        <div
-                          className="pointer-events-none absolute inset-6 border-2 border-dashed border-rose-400/80"
-                          style={{ aspectRatio: codeAspect }}
-                        />
-                      </div>
-                      <p className="text-xs text-neutral-500">
-                        Fill the dashed box with the printed or on-screen page, hold steady, then capture.
-                      </p>
-                      <div className="flex gap-2">
-                        <button
-                          onClick={captureFromCamera}
-                          disabled={cameraBusy}
-                          className="flex-1 rounded-lg bg-rose-600 px-3 py-2 text-sm font-medium text-white hover:bg-rose-700 disabled:opacity-50"
-                        >
-                          {cameraBusy ? "decoding…" : "Capture & decode"}
-                        </button>
-                        <button
-                          onClick={closeCamera}
-                          className="rounded-lg border border-neutral-300 px-3 py-2 text-sm text-neutral-600 dark:border-neutral-700 dark:text-neutral-400"
-                        >
-                          Close
-                        </button>
-                      </div>
+                  <button
+                    onClick={openCamera}
+                    className={`w-full rounded-lg border border-dashed border-neutral-300 px-3 py-2 text-sm text-neutral-600 hover:border-rose-400 dark:border-neutral-700 dark:text-neutral-400 ${cameraOn ? "hidden" : ""}`}
+                  >
+                    📷 Open camera
+                  </button>
+                  <div className={`space-y-3 ${cameraOn ? "" : "hidden"}`}>
+                    <div className="relative overflow-hidden rounded-lg bg-black">
+                      <video ref={videoRef} muted playsInline className="w-full" />
+                      <div
+                        className="pointer-events-none absolute inset-6 border-2 border-dashed border-rose-400/80"
+                        style={{ aspectRatio: codeAspect }}
+                      />
                     </div>
-                  )}
+                    <p className="text-xs text-neutral-500">
+                      Fill the dashed box with the printed or on-screen page, hold steady, then capture.
+                    </p>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={captureFromCamera}
+                        disabled={cameraBusy}
+                        className="flex-1 rounded-lg bg-rose-600 px-3 py-2 text-sm font-medium text-white hover:bg-rose-700 disabled:opacity-50"
+                      >
+                        {cameraBusy ? "decoding…" : "Capture & decode"}
+                      </button>
+                      <button
+                        onClick={closeCamera}
+                        className="rounded-lg border border-neutral-300 px-3 py-2 text-sm text-neutral-600 dark:border-neutral-700 dark:text-neutral-400"
+                      >
+                        Close
+                      </button>
+                    </div>
+                  </div>
                   {cameraError && <p className="mt-2 text-sm text-red-600 dark:text-red-400">{cameraError}</p>}
 
                   {cameraResult && (
