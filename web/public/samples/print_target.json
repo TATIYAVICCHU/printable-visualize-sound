@@ -15,6 +15,48 @@
     1464,
     2052
   ],
-  "margin_px": 60,
-  "marker_px": 28
+  "code_corners_px": {
+    "top_left": [
+      220,
+      220
+    ],
+    "top_right": [
+      1684,
+      220
+    ],
+    "bottom_right": [
+      1684,
+      2272
+    ],
+    "bottom_left": [
+      220,
+      2272
+    ]
+  },
+  "marker_centers_px": {
+    "0": [
+      110.0,
+      110.0
+    ],
+    "1": [
+      1794.0,
+      110.0
+    ],
+    "2": [
+      1794.0,
+      2382.0
+    ],
+    "3": [
+      110.0,
+      2382.0
+    ]
+  },
+  "aruco_dict": "DICT_ARUCO_ORIGINAL",
+  "marker_ids_clockwise_from_top_left": [
+    0,
+    1,
+    2,
+    3
+  ],
+  "marker_px": 140
 }
