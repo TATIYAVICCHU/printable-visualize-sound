@@ -1,0 +1,12 @@
+{
+  "name": "visualize-sound-paper",
+  "private": true,
+  "description": "Generates the Word-formatted draft paper from generate.js",
+  "scripts": {
+    "build": "node generate.js"
+  },
+  "dependencies": {
+    "docx": "^9.7.1",
+    "image-size": "^2.0.2"
+  }
+}

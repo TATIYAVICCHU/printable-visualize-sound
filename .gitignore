@@ -15,3 +15,9 @@ wheels/
 
 # macOS
 .DS_Store
+
+# Generated docx build output (regenerate with paper/generate.js)
+/paper/node_modules/
+/paper/*.docx
+/paper/preview.*
+/paper/~$*
