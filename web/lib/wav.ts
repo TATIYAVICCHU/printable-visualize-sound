@@ -33,8 +33,7 @@ export function floatToWavBlob(samples: Float64Array | Float32Array, sr: number)
   return new Blob([buffer], { type: "audio/wav" });
 }
 
-export async function decodeAudioFile(file: File, targetSr = 16000): Promise<{ samples: Float64Array; sr: number }> {
-  const arrayBuffer = await file.arrayBuffer();
+export async function decodeAudioBuffer(arrayBuffer: ArrayBuffer, targetSr = 16000): Promise<{ samples: Float64Array; sr: number }> {
   const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
   const ctx = new AudioCtx();
   const decoded = await ctx.decodeAudioData(arrayBuffer);
@@ -47,6 +46,17 @@ export async function decodeAudioFile(file: File, targetSr = 16000): Promise<{ s
   const rendered = await offline.startRendering();
   await ctx.close();
   return { samples: Float64Array.from(rendered.getChannelData(0)), sr: targetSr };
+}
+
+export async function decodeAudioFile(file: File, targetSr = 16000): Promise<{ samples: Float64Array; sr: number }> {
+  return decodeAudioBuffer(await file.arrayBuffer(), targetSr);
+}
+
+/** Fetch a bundled sample (e.g. from /public/samples/) and decode it. */
+export async function fetchSample(url: string, targetSr = 16000): Promise<{ samples: Float64Array; sr: number }> {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`could not load ${url}: ${res.status}`);
+  return decodeAudioBuffer(await res.arrayBuffer(), targetSr);
 }
 
 function normalize(x: Float64Array, peak = 0.9): Float64Array {
