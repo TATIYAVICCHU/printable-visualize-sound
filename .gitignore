@@ -9,9 +9,9 @@ wheels/
 # Virtual environments
 .venv
 
-# Generated experiment output (regenerate with scripts/)
-out/
-samples/
+# Generated experiment output (regenerate with scripts/make_samples.py)
+/out/
+/samples/
 
 # macOS
 .DS_Store
