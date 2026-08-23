@@ -14,7 +14,10 @@ plan, and the same figures below with **playable audio clips** next to each
 one) lives in [`artifacts/visualize-sound.html`](artifacts/visualize-sound.html)
 — open it in a browser, or view it hosted at the [research
 artifact](https://claude.ai/code/artifact/b747f5da-79ea-4b26-9629-00100ed4c122)
-link. Static images only render here; this README documents the code. Every
+link. Static images only render here; this README documents the code. There's
+also a live, in-browser [interactive lab](web/) (Next.js, deploys to Vercel as
+a single static bundle, no backend) for trying different clips, schemes, and
+damage levels yourself and hearing the result immediately. Every
 source cited is listed in [`artifacts/references.md`](artifacts/references.md).
 
 ## How it works
