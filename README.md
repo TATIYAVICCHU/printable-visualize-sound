@@ -10,7 +10,10 @@ and photographed back.
 Route A of a larger research plan: **can a phase-aware color encoding of sound
 survive the physical print–scan channel, and which design choices help it
 survive best?** Full research dossier (prior art, positioning, experiment
-plan) lives in the published artifact; this README documents the code.
+plan, and the same figures below with **playable audio clips** next to
+each one) lives in the [research
+artifact](https://claude.ai/code/artifact/b747f5da-79ea-4b26-9629-00100ed4c122)
+— static images only render here; this README documents the code.
 
 ## How it works
 
@@ -80,6 +83,11 @@ regenerate any time with the commands above). The figures shown below are
 copied into `assets/figures/`, which is tracked, so they render on GitHub.
 
 ## Results
+
+> Static images below; the [research
+> artifact](https://claude.ai/code/artifact/b747f5da-79ea-4b26-9629-00100ed4c122)
+> has the same figures with the actual audio clips playable next to them —
+> original vs. recovered, digital vs. after simulated print damage.
 
 ### The strip problem, fixed
 
